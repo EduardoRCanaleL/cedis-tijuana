@@ -308,7 +308,7 @@ function PIsAgrupados({ pis, onGoToFaltantes }: { pis: any[], onGoToFaltantes?: 
 }
 
 // ── COMERCIO EXTERIOR ─────────────────────────────────────────
-function CEView({ onBack, onGoToFaltantes, userName, userRol }: { onBack: ()=>void, onGoToFaltantes?: ()=>void, userName?: string, userRol?: string }) {
+function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBack: ()=>void, onLogout?: ()=>void, onGoToFaltantes?: ()=>void, userName?: string, userRol?: string }) {
   const [tab, setTab]             = useState('pis')
   const [pis, setPIs]             = useState<any[]>([])
   const [loading, setLoading]     = useState(false)
@@ -659,7 +659,7 @@ function CEView({ onBack, onGoToFaltantes, userName, userRol }: { onBack: ()=>vo
         <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:500,background:ROLE_BG.CE,color:ROLE_TEXT.CE}}>Comercio Exterior</span>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
           <Badge color="blue">PIs: {pis.length}</Badge>
-          {userName&&<UserMenu email={userName} rol={userRol||'CE'} onLogout={onBack}/>}
+          {userName&&<UserMenu email={userName} rol={userRol||'CE'} onLogout={onLogout||onBack} onHome={onBack}/>}
         </div>
       </div>
       <div style={{padding:'16px 20px 0'}}>
@@ -841,7 +841,7 @@ function InventarioAgrupado({ inventario }: { inventario: any[] }) {
 }
 
 // ── ALMACÉN ───────────────────────────────────────────────────
-function ALMView({ onBack, initialTab, userName, userRol }: { onBack: ()=>void, initialTab?: string, userName?: string, userRol?: string }) {
+function ALMView({ onBack, onLogout, initialTab, userName, userRol }: { onBack: ()=>void, onLogout?: ()=>void, initialTab?: string, userName?: string, userRol?: string }) {
   const [tab, setTab]               = useState(initialTab||'pendientes')
   const [pendientes, setPendientes] = useState<any[]>([])
   const [recibidos,  setRecibidos]  = useState<any[]>([])
@@ -940,7 +940,7 @@ function ALMView({ onBack, initialTab, userName, userRol }: { onBack: ()=>void, 
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
           <Badge color="green">Stock: {inventario.reduce((a,i)=>a+i.qty_disponible,0).toLocaleString()}</Badge>
           <Badge color="amber">Pendientes: {pendientes.length}</Badge>
-          {userName&&<UserMenu email={userName} rol={userRol||'ALM'} onLogout={onBack}/>}
+          {userName&&<UserMenu email={userName} rol={userRol||'ALM'} onLogout={onLogout||onBack} onHome={onBack}/>}
         </div>
       </div>
       <div style={{padding:'16px 20px 0'}}>
@@ -1210,7 +1210,7 @@ function ALMView({ onBack, initialTab, userName, userRol }: { onBack: ()=>void, 
 }
 
 // ── PRODUCCIÓN ────────────────────────────────────────────────
-function PRODView({ onBack, userName, userRol }: { onBack: ()=>void, userName?: string, userRol?: string }) {
+function PRODView({ onBack, onLogout, userName, userRol }: { onBack: ()=>void, onLogout?: ()=>void, userName?: string, userRol?: string }) {
   const [tab,          setTab]          = useState('solicitar')
   const [modo,         setModo]         = useState<'pi'|'contenedor'|'parte'|'libre'>('pi')
   const [pis,          setPIs]          = useState<any[]>([])
@@ -1300,7 +1300,7 @@ function PRODView({ onBack, userName, userRol }: { onBack: ()=>void, userName?: 
         <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:500,background:ROLE_BG.PROD,color:ROLE_TEXT.PROD}}>Producción</span>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
           <Badge color="purple">Solicitudes: {solicitudes.length}</Badge>
-          {userName&&<UserMenu email={userName} rol={userRol||'PROD'} onLogout={onBack}/>}
+          {userName&&<UserMenu email={userName} rol={userRol||'PROD'} onLogout={onLogout||onBack} onHome={onBack}/>}
         </div>
       </div>
       <div style={{padding:'16px 20px 0'}}>
@@ -1515,7 +1515,7 @@ function PRODView({ onBack, userName, userRol }: { onBack: ()=>void, userName?: 
 }
 
 // ── USER MENU ─────────────────────────────────────────────────
-function UserMenu({ email, rol, onLogout }: { email: string, rol: string, onLogout: ()=>void }) {
+function UserMenu({ email, rol, onLogout, onHome }: { email: string, rol: string, onLogout: ()=>void, onHome?: ()=>void }) {
   const [open,        setOpen]        = useState(false)
   const [showPwd,     setShowPwd]     = useState(false)
   const [pwdActual,   setPwdActual]   = useState('')
@@ -1580,6 +1580,18 @@ function UserMenu({ email, rol, onLogout }: { email: string, rol: string, onLogo
             {/* Opciones */}
             {!showPwd&&(
               <div>
+                {onHome&&(
+                  <>
+                    <button onClick={()=>{setOpen(false);onHome()}}
+                      style={{width:'100%',padding:'11px 16px',border:'none',background:'transparent',
+                        textAlign:'left',fontSize:13,color:'#1a1a1a',cursor:'pointer',display:'flex',gap:8,alignItems:'center'}}
+                      onMouseEnter={e=>e.currentTarget.style.background='#f5f5f5'}
+                      onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                      ← Inicio
+                    </button>
+                    <div style={{borderTop:'0.5px solid #eee'}}/>
+                  </>
+                )}
                 <button onClick={()=>setShowPwd(true)}
                   style={{width:'100%',padding:'11px 16px',border:'none',background:'transparent',
                     textAlign:'left',fontSize:13,color:'#1a1a1a',cursor:'pointer',display:'flex',gap:8,alignItems:'center'}}
@@ -1681,13 +1693,10 @@ function AdminView({ userName, onSelectModule, onLogout }: {
     if (!newEmail.trim()||!newNombre.trim()) { setError('Email y nombre son obligatorios'); return }
     setSaving(true); setError('')
     try {
-      const { data: { session } } = await supabase.auth.getSession()
       const { data, error:e } = await supabase.functions.invoke('invite-user', {
-        body: { email: newEmail.trim().toLowerCase(), nombre: newNombre.trim(), rol: newRol },
-        headers: { Authorization: `Bearer ${session?.access_token}` }
+        body: { email: newEmail.trim().toLowerCase(), nombre: newNombre.trim(), rol: newRol }
       })
-      if (e) throw new Error(e.message)
-      if (data?.error) throw new Error(data.error)
+      if (e || data?.error) throw new Error(data?.error || e?.message)
       setNewEmail(''); setNewNombre(''); setNewRol('CE'); setShowForm(false)
       setError('✓ Invitación enviada — el usuario recibirá un email para crear su contraseña')
       await loadUsuarios()
@@ -1958,9 +1967,15 @@ export default function App() {
   )
   // ADMIN navegando a un módulo específico
   const effectiveRole = role==='ADMIN' ? adminModule : role
-  if (effectiveRole==='CE')   return <CEView   onBack={()=>role==='ADMIN'?setAdminModule(null):handleLogout()} onGoToFaltantes={goToFaltantes} userName={user?.email} userRol={role||'CE'}/>
-  if (effectiveRole==='ALM')  return <ALMView  onBack={()=>role==='ADMIN'?setAdminModule(null):handleLogout()} initialTab={almTab} userName={user?.email} userRol={role||'ALM'}/>
-  if (effectiveRole==='PROD') return <PRODView onBack={()=>role==='ADMIN'?setAdminModule(null):handleLogout()} userName={user?.email} userRol={role||'PROD'}/>
+  const handleHome = () => {
+    if (role==='ADMIN') setAdminModule(null)
+    // Para roles normales, onHome no hace nada diferente — ya están en su único módulo
+    // El logout sigue siendo el botón de cerrar sesión
+  }
+
+  if (effectiveRole==='CE')   return <CEView   onBack={handleHome} onLogout={handleLogout} onGoToFaltantes={goToFaltantes} userName={user?.email} userRol={role||'CE'}/>
+  if (effectiveRole==='ALM')  return <ALMView  onBack={handleHome} onLogout={handleLogout} initialTab={almTab} userName={user?.email} userRol={role||'ALM'}/>
+  if (effectiveRole==='PROD') return <PRODView onBack={handleHome} onLogout={handleLogout} userName={user?.email} userRol={role||'PROD'}/>
 
   return (
     <div style={{fontFamily:'system-ui,sans-serif',maxWidth:600,margin:'60px auto',padding:'0 20px',textAlign:'center'}}>
