@@ -4,9 +4,9 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from './lib/supabase'
 
-const ROLE_BG    = { CE:'#E6F1FB', ALM:'#E1F5EE', PROD:'#EEEDFE' }
-const ROLE_TEXT  = { CE:'#0C447C', ALM:'#085041', PROD:'#3C3489' }
-const ROLE_COLOR = { CE:'#185FA5', ALM:'#0F6E56', PROD:'#534AB7' }
+const ROLE_BG    = { CE:'#E6F1FB', ALM:'#E1F5EE', PROD:'#EEEDFE', DISC:'#FCEBEB' }
+const ROLE_TEXT  = { CE:'#0C447C', ALM:'#085041', PROD:'#3C3489', DISC:'#A32D2D' }
+const ROLE_COLOR = { CE:'#185FA5', ALM:'#0F6E56', PROD:'#534AB7', DISC:'#A32D2D' }
 
 function Badge({ color, children }: { color: string, children: React.ReactNode }) {
   const m: Record<string,{bg:string,tx:string}> = {
@@ -165,6 +165,7 @@ function RoleSelector({ onSelect }: { onSelect: (r:string)=>void }) {
     {key:'CE',   title:'Comercio Exterior', desc:'Registra PIs, sube Packing Lists, genera manifiestos.'},
     {key:'ALM',  title:'Almacén',           desc:'Recibe mercancía, gestiona inventario y despachos.'},
     {key:'PROD', title:'Producción',        desc:'Solicita materiales por PI, contenedor o parte.'},
+    {key:'DISC', title:'Discrepancias',     desc:'Consulta faltantes y exporta reportes a Excel.'},
   ]
   return (
     <div style={{maxWidth:560,margin:'60px auto',padding:'0 20px',fontFamily:'system-ui,sans-serif'}}>
@@ -1714,6 +1715,7 @@ function AdminView({ userName, onSelectModule, onLogout }: {
     {key:'CE',   title:'Comercio Exterior', bg:'#E6F1FB', tx:'#0C447C', dot:'#185FA5'},
     {key:'ALM',  title:'Almacén',           bg:'#E1F5EE', tx:'#085041', dot:'#0F6E56'},
     {key:'PROD', title:'Producción',        bg:'#EEEDFE', tx:'#3C3489', dot:'#534AB7'},
+    {key:'DISC', title:'Discrepancias',     bg:'#FCEBEB', tx:'#A32D2D', dot:'#A32D2D'},
   ]
 
   return (
@@ -1915,6 +1917,221 @@ function LoginView({ onLogin }: { onLogin: (user:any, rol:string)=>void }) {
   )
 }
 
+// ── DISCREPANCIAS ─────────────────────────────────────────────
+function DISCView({ onBack, onLogout, userName, userRol }: {
+  onBack: ()=>void, onLogout?: ()=>void, userName?: string, userRol?: string
+}) {
+  const [discrepancias, setDiscrepancias] = useState<any[]>([])
+  const [pis,           setPIs]           = useState<any[]>([])
+  const [loading,       setLoading]       = useState(false)
+  const [openPIs,       setOpenPIs]       = useState<Record<string,boolean>>({})
+  const [openConts,     setOpenConts]     = useState<Record<string,boolean>>({})
+
+  useEffect(()=>{ loadData() },[])
+
+  const loadData = async () => {
+    setLoading(true)
+    const [{data:disc},{data:pisData}] = await Promise.all([
+      supabase.from('discrepancias').select('*').order('created_at',{ascending:false}),
+      supabase.from('pis').select('id,pi_number,modelo,contenedor,proveedor_id,proveedores(nombre)').eq('tipo','pi'),
+    ])
+    setDiscrepancias(disc||[])
+    setPIs(pisData||[])
+    setLoading(false)
+  }
+
+  // Enriquecer discrepancias con datos del PI
+  const enriched = discrepancias.map(d => {
+    const pi = pis.find(p => p.pi_number === d.pi_number)
+    return {
+      ...d,
+      modelo:    pi?.modelo    || d.modelo || '—',
+      proveedor: (pi as any)?.proveedores?.nombre || '—',
+      piBase:    d.pi_number?.split('-').slice(0,-1).join('-') || d.pi_number,
+      contenedor: d.pi_number?.split('-').pop() || '—',
+    }
+  })
+
+  // Métricas
+  const abiertas  = enriched.filter(d=>d.status==='abierto')
+  const resueltas = enriched.filter(d=>d.status==='resuelto')
+  const piezasFaltantes = abiertas.reduce((a,d)=>a+(d.qty_declarada-d.qty_real),0)
+  const valorRiesgo = abiertas.reduce((a,d)=>a+((d.qty_declarada-d.qty_real)*(d.valor_unitario||0)),0)
+
+  // Agrupar por PI base → contenedor
+  const grouped: Record<string,Record<string,any[]>> = {}
+  for (const d of enriched) {
+    if (!grouped[d.piBase]) grouped[d.piBase] = {}
+    if (!grouped[d.piBase][d.contenedor]) grouped[d.piBase][d.contenedor] = []
+    grouped[d.piBase][d.contenedor].push(d)
+  }
+
+  // Exportar Excel
+  const exportExcel = (items: any[], filename: string) => {
+    const rows = items.map(d => ({
+      'PI':              d.piBase,
+      'Contenedor':      d.contenedor,
+      'Proveedor':       d.proveedor,
+      'Modelo':          d.modelo,
+      'Part No':         d.part_no,
+      'Descripción':     d.descripcion,
+      'Qty Declarada':   d.qty_declarada,
+      'Qty Recibida':    d.qty_real,
+      'Diferencia':      d.qty_declarada - d.qty_real,
+      'Precio Unitario': d.valor_unitario || 0,
+      'Total Faltante':  (d.qty_declarada - d.qty_real) * (d.valor_unitario || 0),
+      'Estatus':         d.status,
+      'Fecha':           d.created_at?.slice(0,10) || '—',
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Discrepancias')
+    XLSX.writeFile(wb, `${filename}.xlsx`)
+  }
+
+  return (
+    <div style={{fontFamily:'system-ui,sans-serif',maxWidth:960,margin:'0 auto',paddingBottom:40}}>
+      {/* Header */}
+      <div style={{padding:'14px 20px',borderBottom:'1px solid #eee',display:'flex',alignItems:'center',gap:10}}>
+        <div style={{width:8,height:8,borderRadius:'50%',background:'#A32D2D'}}/>
+        <span style={{fontSize:14,fontWeight:600,color:'#1a1a1a'}}>CEDIS Tijuana</span>
+        <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:500,background:'#FCEBEB',color:'#A32D2D'}}>Discrepancias</span>
+        <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
+          {userName&&<UserMenu email={userName} rol={userRol||'DISC'} onLogout={onLogout||onBack} onHome={onBack}/>}
+        </div>
+      </div>
+
+      <div style={{padding:'20px'}}>
+        {/* Métricas */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:20}}>
+          {[
+            {label:'Faltantes abiertos', val:String(abiertas.length),                color:'#A32D2D'},
+            {label:'Piezas faltantes',   val:piezasFaltantes.toLocaleString(),        color:'#1a1a1a'},
+            {label:'Valor en riesgo',    val:`$${valorRiesgo.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`, color:'#854F0B'},
+            {label:'Resueltos',          val:String(resueltas.length),               color:'#3B6D11'},
+          ].map(m=>(
+            <div key={m.label} style={{background:'#f9f9f9',borderRadius:8,padding:'10px 14px'}}>
+              <div style={{fontSize:11,color:'#888',marginBottom:2}}>{m.label}</div>
+              <div style={{fontSize:18,fontWeight:500,color:m.color}}>{m.val}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Botón exportar todo */}
+        <div style={{display:'flex',justifyContent:'flex-end',marginBottom:16}}>
+          <button onClick={()=>exportExcel(enriched,'discrepancias-todas')}
+            style={{padding:'8px 16px',borderRadius:8,border:'none',background:'#1a1a1a',
+              color:'#fff',fontSize:13,fontWeight:500,cursor:'pointer',display:'flex',gap:6,alignItems:'center'}}>
+            ↓ Exportar todo a Excel
+          </button>
+        </div>
+
+        {loading&&<div style={{padding:24,textAlign:'center',color:'#bbb'}}>Cargando...</div>}
+
+        {!loading&&Object.keys(grouped).length===0&&(
+          <div style={{padding:24,textAlign:'center',color:'#bbb',fontSize:13}}>No hay discrepancias registradas.</div>
+        )}
+
+        {/* Agrupado PI → Contenedor → Partes */}
+        {Object.entries(grouped).map(([piBase, contMap])=>{
+          const piItems = Object.values(contMap).flat()
+          const piAbiertas = piItems.filter(d=>d.status==='abierto').length
+          const piResueltas = piItems.filter(d=>d.status==='resuelto').length
+          const isOpen = openPIs[piBase]
+
+          return (
+            <div key={piBase} style={{marginBottom:8,border:'0.5px solid #e0e0e0',borderRadius:10,overflow:'hidden'}}>
+              {/* Header PI */}
+              <div style={{padding:'11px 16px',background:'#f9f9f9',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                <span onClick={()=>setOpenPIs(s=>({...s,[piBase]:!s[piBase]}))}
+                  style={{fontSize:12,color:'#aaa',cursor:'pointer',minWidth:14}}>{isOpen?'▼':'▶'}</span>
+                <span onClick={()=>setOpenPIs(s=>({...s,[piBase]:!s[piBase]}))} style={{cursor:'pointer',display:'flex',gap:8,alignItems:'center',flex:1,flexWrap:'wrap'}}>
+                  <Badge color="blue">{piBase}</Badge>
+                  <Badge color="purple">{piItems[0]?.modelo||'—'}</Badge>
+                  <span style={{fontSize:12,color:'#888'}}>{piItems[0]?.proveedor||'—'}</span>
+                  <span style={{fontSize:12,color:'#888'}}>{Object.keys(contMap).length} contenedor{Object.keys(contMap).length!==1?'es':''}</span>
+                  {piAbiertas>0&&<Badge color="coral">{piAbiertas} abierto{piAbiertas!==1?'s':''}</Badge>}
+                  {piResueltas>0&&<Badge color="green">{piResueltas} resuelto{piResueltas!==1?'s':''}</Badge>}
+                </span>
+                <button onClick={()=>exportExcel(piItems, `disc-${piBase}`)}
+                  style={{padding:'4px 10px',borderRadius:6,fontSize:11,fontWeight:500,cursor:'pointer',
+                    background:'#f0f0f0',color:'#1a1a1a',border:'1px solid #ddd',whiteSpace:'nowrap'}}>
+                  ↓ Excel
+                </button>
+              </div>
+
+              {/* Contenedores */}
+              {isOpen&&Object.entries(contMap).map(([cont, items])=>{
+                const ck = `${piBase}-${cont}`
+                const isContOpen = openConts[ck]
+                const contAbiertas = items.filter(d=>d.status==='abierto').length
+
+                return (
+                  <div key={cont} style={{borderTop:'0.5px solid #eee'}}>
+                    {/* Header contenedor */}
+                    <div style={{padding:'8px 16px 8px 40px',display:'flex',gap:10,alignItems:'center',background:'#fafafa',flexWrap:'wrap'}}>
+                      <span onClick={()=>setOpenConts(s=>({...s,[ck]:!s[ck]}))}
+                        style={{fontSize:11,color:'#aaa',cursor:'pointer',minWidth:14}}>{isContOpen?'▼':'▶'}</span>
+                      <span onClick={()=>setOpenConts(s=>({...s,[ck]:!s[ck]}))} style={{cursor:'pointer',display:'flex',gap:8,alignItems:'center',flex:1}}>
+                        <Badge color="teal">{cont}</Badge>
+                        <span style={{fontSize:12,color:'#888'}}>{items.length} parte{items.length!==1?'s':''}</span>
+                        {contAbiertas>0&&<Badge color="coral">{contAbiertas} abierto{contAbiertas!==1?'s':''}</Badge>}
+                      </span>
+                      <button onClick={()=>exportExcel(items, `disc-${piBase}-${cont}`)}
+                        style={{padding:'3px 8px',borderRadius:6,fontSize:11,fontWeight:500,cursor:'pointer',
+                          background:'#f0f0f0',color:'#1a1a1a',border:'1px solid #ddd',whiteSpace:'nowrap'}}>
+                        ↓ Excel
+                      </button>
+                    </div>
+
+                    {/* Tabla partes */}
+                    {isContOpen&&(
+                      <div style={{borderTop:'0.5px solid #f0f0f0',overflowX:'auto'}}>
+                        <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                          <thead><tr style={{background:'#f9f9f9',borderBottom:'0.5px solid #eee'}}>
+                            {['Part No','Descripción','Declarado','Recibido','Diferencia','Unit Price','Total Faltante','Estatus','Fecha'].map(h=>(
+                              <th key={h} style={{padding:'6px 12px',textAlign:'left',color:'#aaa',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
+                            ))}
+                          </tr></thead>
+                          <tbody>
+                            {items.map((d:any)=>{
+                              const diff = d.qty_declarada - d.qty_real
+                              const totalFalt = diff * (d.valor_unitario||0)
+                              const vencido = d.status==='abierto' && new Date(d.vence_at).getTime()<Date.now()
+                              return (
+                                <tr key={d.id} style={{borderBottom:'0.5px solid #f5f5f5',
+                                  background:d.status==='resuelto'?'transparent':vencido?'#FFFBF5':'transparent'}}>
+                                  <td style={{padding:'7px 12px',fontFamily:'monospace',fontSize:11}}>{d.part_no}</td>
+                                  <td style={{padding:'7px 12px'}}><span style={{display:'block',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{d.descripcion}</span></td>
+                                  <td style={{padding:'7px 12px',textAlign:'right'}}>{(d.qty_declarada||0).toLocaleString()}</td>
+                                  <td style={{padding:'7px 12px',textAlign:'right'}}>{(d.qty_real||0).toLocaleString()}</td>
+                                  <td style={{padding:'7px 12px',textAlign:'right'}}><strong style={{color:diff>0?'#A32D2D':'#3B6D11'}}>{diff.toLocaleString()}</strong></td>
+                                  <td style={{padding:'7px 12px',textAlign:'right'}}>{d.valor_unitario?`$${d.valor_unitario.toFixed(4)}`:'—'}</td>
+                                  <td style={{padding:'7px 12px',textAlign:'right',color:'#854F0B',fontWeight:500}}>{totalFalt>0?`$${totalFalt.toFixed(2)}`:'—'}</td>
+                                  <td style={{padding:'7px 12px'}}>
+                                    <Badge color={d.status==='resuelto'?'green':vencido?'red':'amber'}>
+                                      {d.status==='resuelto'?'resuelto':vencido?'vencido':'abierto'}
+                                    </Badge>
+                                  </td>
+                                  <td style={{padding:'7px 12px',color:'#888'}}>{d.created_at?.slice(0,10)||'—'}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ── APP PRINCIPAL ─────────────────────────────────────────────
 export default function App() {
   const [authState,    setAuthState]    = useState<'loading'|'login'|'app'>('loading')
@@ -1976,6 +2193,7 @@ export default function App() {
   if (effectiveRole==='CE')   return <CEView   onBack={handleHome} onLogout={handleLogout} onGoToFaltantes={goToFaltantes} userName={user?.email} userRol={role||'CE'}/>
   if (effectiveRole==='ALM')  return <ALMView  onBack={handleHome} onLogout={handleLogout} initialTab={almTab} userName={user?.email} userRol={role||'ALM'}/>
   if (effectiveRole==='PROD') return <PRODView onBack={handleHome} onLogout={handleLogout} userName={user?.email} userRol={role||'PROD'}/>
+  if (effectiveRole==='DISC') return <DISCView onBack={handleHome} onLogout={handleLogout} userName={user?.email} userRol={role||'DISC'}/>
 
   return (
     <div style={{fontFamily:'system-ui,sans-serif',maxWidth:600,margin:'60px auto',padding:'0 20px',textAlign:'center'}}>
