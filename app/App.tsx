@@ -325,13 +325,13 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
 
   const loadPIs = async () => {
     const { data } = await supabase
-      .from('pis')
-      .select('*, packing_list_items(qty_esperada, total_amount)')
+      .from('pis_resumen')
+      .select('*')
       .order('created_at',{ascending:false})
     setPIs((data||[]).map((pi:any)=>({
       ...pi,
-      _piezas: (pi.packing_list_items||[]).reduce((s:number,i:any)=>s+(i.qty_esperada||0),0),
-      _valor:  (pi.packing_list_items||[]).reduce((s:number,i:any)=>s+(i.total_amount||0),0),
+      _piezas: pi.total_piezas || 0,
+      _valor:  pi.total_valor  || 0,
     })))
   }
   useEffect(()=>{ loadPIs() },[])
@@ -978,10 +978,10 @@ function ALMView({ onBack, onLogout, initialTab, userName, userRol }: { onBack: 
 
   const loadData = async () => {
     const [{data:pend},{data:rec},{data:inv},{data:sol},{data:disc}] = await Promise.all([
-      supabase.from('pis').select('*, packing_list_items(*)').eq('tipo','pi').eq('status','pendiente').order('created_at',{ascending:false}),
-      supabase.from('pis').select('*').eq('tipo','pi').in('status',['recibido','con_faltantes']).order('created_at',{ascending:false}),
-      supabase.from('inventario').select('*').order('modelo'),
-      supabase.from('solicitudes').select('*, solicitud_items(*)').eq('status','solicitado').order('created_at',{ascending:false}),
+      supabase.from('pis').select('id,pi_number,modelo,contenedor,comentario,eta,status,proveedor_id,packing_list_items(id,part_no,descripcion,qty_esperada,um,valor_unitario,total_amount)').eq('tipo','pi').eq('status','pendiente').order('created_at',{ascending:false}),
+      supabase.from('pis_resumen').select('*').eq('tipo','pi').in('status',['recibido','con_faltantes']).order('created_at',{ascending:false}),
+      supabase.from('inventario').select('id,pi_number,modelo,part_no,descripcion,um,qty_disponible,qty_comprometido').order('modelo'),
+      supabase.from('solicitudes').select('id,area,notas,modo_solicitud,status,created_at,solicitud_items(id,pi_number,part_no,descripcion,um,qty,modelo)').eq('status','solicitado').order('created_at',{ascending:false}),
       supabase.from('discrepancias').select('*').order('created_at',{ascending:false}),
     ])
     setPendientes(pend||[]); setRecibidos(rec||[]); setInventario(inv||[]); setSolicitudes(sol||[]); setDiscrepancias(disc||[])
@@ -1329,10 +1329,10 @@ function PRODView({ onBack, onLogout, userName, userRol }: { onBack: ()=>void, o
 
   const loadData = async () => {
     const [{data:pisData},{data:invData},{data:solData},{data:discData}] = await Promise.all([
-      supabase.from('pis').select('*').eq('tipo','pi').in('status',['recibido','con_faltantes']).order('created_at',{ascending:false}),
-      supabase.from('inventario').select('*').gt('qty_disponible',0).order('modelo'),
-      supabase.from('solicitudes').select('*, solicitud_items(*)').order('created_at',{ascending:false}),
-      supabase.from('discrepancias').select('*').eq('status','abierto'),
+      supabase.from('pis_resumen').select('id,pi_number,modelo,contenedor,comentario,status').eq('tipo','pi').in('status',['recibido','con_faltantes']).order('created_at',{ascending:false}),
+      supabase.from('inventario').select('id,pi_id,pi_number,modelo,part_no,descripcion,um,qty_disponible').gt('qty_disponible',0).order('modelo'),
+      supabase.from('solicitudes').select('id,area,notas,modo_solicitud,status,created_at,solicitud_items(id,pi_number,part_no,descripcion,um,qty,modelo)').order('created_at',{ascending:false}),
+      supabase.from('discrepancias').select('id,pi_number,part_no,qty_declarada,qty_real,vence_at,status').eq('status','abierto'),
     ])
     setPIs(pisData||[]); setInventario(invData||[]); setSolicitudes(solData||[]); setDiscrepancias(discData||[])
   }
