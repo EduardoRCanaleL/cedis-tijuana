@@ -317,10 +317,79 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
   const [piNum, setPiNum]         = useState('')
   const [modelo, setModelo]       = useState('')
   const [proveedor, setProveedor] = useState('')
+  const [aiReview,  setAiReview]  = useState<{status:'idle'|'loading'|'done', obs:string[]}>({status:'idle',obs:[]})
+  const [piDuplicado, setPiDuplicado] = useState(false)
   const [contenedor, setContenedor] = useState('')
   const [eta, setEta]             = useState('')
   const [unidades, setUnidades]   = useState('')
   const [notas, setNotas]         = useState('')
+  const [piDuplicado, setPiDuplicado] = useState(false)
+  const [aiReview, setAiReview]   = useState<{loading:boolean, obs:string[]}>({loading:false, obs:[]})
+  const [proveedorSel, setProveedorSel] = useState('')
+
+  const PROVEEDORES = ['KTC','Changhong','MTC','TCL / MOKA','HKC']
+  const PROV_FILES: Record<string,string> = {
+    'KTC':'1 archivo','Changhong':'2 archivos — cárgalos juntos',
+    'MTC':'1 archivo','TCL / MOKA':'1 archivo','HKC':'2 archivos — cárgalos juntos'
+  }
+
+  const checkPiDuplicado = async (val: string) => {
+    if (!val.trim()) { setPiDuplicado(false); return }
+    const {data} = await supabase.from('pis').select('id').ilike('pi_number',`${val.trim()}-%`).limit(1)
+    setPiDuplicado(!!(data&&data.length>0))
+  }
+
+  const runAiReview = async (previewData: any[], piNumVal: string, modeloVal: string, provVal: string, etaVal: string, unidadesVal: string) => {
+    setAiReview({loading:true, obs:[]})
+    try {
+      const resumen = previewData.map(s=>({
+        contenedor: s.contenedor,
+        partes: s.items.length,
+        piezas: s.items.reduce((a:number,i:any)=>a+(i.qty||0),0),
+        valorTotal: s.items.reduce((a:number,i:any)=>a+(i.totalAmount||0),0),
+        partesConValorCero: s.items.filter((i:any)=>!i.value||i.value===0).length,
+      }))
+      const prompt = `Eres un asistente de control de calidad para carga de Packing Lists en un sistema de almacén de manufactura de TVs.
+
+Analiza esta carga y detecta posibles errores o anomalías. Sé conciso y directo.
+
+PI Number: ${piNumVal}
+Proveedor: ${provVal}
+Modelo: ${modeloVal}
+ETA: ${etaVal}
+Unidades TV declaradas: ${unidadesVal}
+Contenedores: ${JSON.stringify(resumen, null, 2)}
+
+Revisa:
+1. ¿Algún contenedor tiene valor total $0? (Error crítico)
+2. ¿Hay contenedores con muy pocas o demasiadas partes vs los demás?
+3. ¿El total de piezas es razonable para las unidades TV declaradas?
+4. ¿Hay inconsistencias entre contenedores del mismo PI?
+5. ¿El PI Number parece válido para el proveedor indicado?
+
+Responde SOLO con un JSON así, sin texto extra:
+{"observaciones": ["obs1", "obs2"], "bloqueantes": ["error1"], "ok": true/false}
+
+Si todo está bien, responde: {"observaciones": [], "bloqueantes": [], "ok": true}`
+
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 500,
+          messages: [{role:'user', content: prompt}]
+        })
+      })
+      const data = await resp.json()
+      const text = data.content?.[0]?.text || '{}'
+      const clean = text.replace(/```json|```/g,'').trim()
+      const parsed = JSON.parse(clean)
+      setAiReview({loading:false, obs:[...(parsed.bloqueantes||[]).map((b:string)=>`🔴 ${b}`), ...(parsed.observaciones||[]).map((o:string)=>`🟡 ${o}`)]})
+    } catch {
+      setAiReview({loading:false, obs:[]})
+    }
+  }
   const fileRef = useRef<HTMLInputElement>(null)
 
   const loadPIs = async () => {
@@ -551,18 +620,66 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
       if (dUnidades)  setUnidades(dUnidades)
       if (allSheets[0]?.contenedor) setContenedor(allSheets[0].contenedor)
       setPreview(allSheets)
-
-      const totalPartes = allSheets.reduce((a:number,s:any)=>a+s.items.length,0)
-      alert(`✓ ${files.length} archivo(s) · ${allSheets.length} contenedor(es) · ${totalPartes} partes\nPI: ${dPI||'—'} · Modelo: ${dModelo||'—'}`)
+      if (dPI) await checkPiDuplicado(dPI)
+      // Trigger AI review
+      await runAiReview(allSheets, dPI||piNum, dModelo||modelo, dProveedor||proveedorSel, dEta||eta, dUnidades||unidades)
 
     } catch(err:any) { alert('Error al leer: '+err.message) }
     setLoading(false)
     if (e.target) e.target.value=''
   }
 
+  const checkPiDuplicado = async (val: string) => {
+    if (!val.trim()) { setPiDuplicado(false); return }
+    const {data} = await supabase.from('pis').select('id').ilike('pi_number',`${val.trim()}-%`).limit(1)
+    setPiDuplicado((data||[]).length > 0)
+  }
+
+  const runAiReview = async () => {
+    if (!preview.length) return
+    setAiReview({status:'loading', obs:[]})
+    try {
+      const today = new Date().toISOString().slice(0,10)
+      const resumen = {
+        pi: piNum, modelo, proveedor, eta, unidades,
+        contenedores: preview.map(s=>({
+          contenedor: s.contenedor,
+          partes: s.items.length,
+          piezas: s.items.reduce((a:number,i:any)=>a+(i.qty||0),0),
+          valor: s.items.reduce((a:number,i:any)=>a+(i.totalAmount||0),0),
+          partesConPrecio0: s.items.filter((i:any)=>!i.value||i.value===0).length,
+        }))
+      }
+      const resp = await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          model:'claude-sonnet-4-20250514',
+          max_tokens:1000,
+          messages:[{role:'user',content:`Eres un asistente de control de calidad para un sistema de importación de partes de TV en una maquila en Tijuana. Revisa este resumen de PI y detecta posibles errores o anomalías. Sé flexible y práctico — solo señala lo que realmente parezca un error. Responde SOLO con un JSON array de observaciones en español, cada una con: {"tipo":"ok"|"advertencia"|"error","mensaje":"..."}. Sin texto adicional.
+
+Datos: ${JSON.stringify(resumen)}
+Fecha hoy: ${today}`}]
+        })
+      })
+      const d = await resp.json()
+      const text = d.content?.[0]?.text||'[]'
+      const clean = text.replace(/```json|```/g,'').trim()
+      const obs = JSON.parse(clean)
+      setAiReview({status:'done', obs})
+    } catch {
+      setAiReview({status:'done', obs:[{tipo:'advertencia',mensaje:'No se pudo completar la revisión automática. Verifica los datos manualmente.'}]})
+    }
+  }
+
   const submitPI = async () => {
     if (!piNum.trim())   { alert('El PI Number es obligatorio'); return }
+    if (!proveedorSel)   { alert('Selecciona el proveedor antes de continuar'); return }
     if (!preview.length) { alert('Carga el Packing List primero'); return }
+    if (piDuplicado)     { alert('Este PI ya está registrado en el sistema'); return }
+    if (eta && eta < new Date().toISOString().slice(0,10)) { alert('La ETA no puede ser una fecha anterior a hoy'); return }
+    const contsValorCero = preview.filter(s=>s.items.reduce((a:number,i:any)=>a+(i.totalAmount||0),0)===0)
+    if (contsValorCero.length>0) { alert(`Los siguientes contenedores tienen valor $0:\n${contsValorCero.map((s:any)=>s.contenedor).join(', ')}\n\nVerifica el Packing List antes de continuar.`); return }
 
     let modeloFinal = modelo.trim()
     if (!modeloFinal) {
@@ -676,70 +793,221 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
         {tab==='pis'&&<PIsAgrupados pis={pis} onGoToFaltantes={onGoToFaltantes}/>}
 
         {tab==='nuevo'&&(
-          <div style={{maxWidth:640}}>
-            <div style={{background:'#E6F1FB',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#0C447C'}}>
-              Soporta: KTC · Changhong · MTC · TCL · HKC — Puedes cargar varios archivos del mismo PI a la vez.
-            </div>
-            <div style={{marginBottom:20,padding:14,border:'2px dashed #B5D4F4',borderRadius:10,textAlign:'center'}}>
-              <div style={{fontSize:13,color:'#666',marginBottom:10}}>Sube uno o varios Packing Lists y los campos se llenarán solos</div>
-              <Btn onClick={()=>fileRef.current?.click()} disabled={loading} style={{background:ROLE_COLOR.CE,color:'#fff'}}>
-                {loading?'Leyendo...':'Cargar Excel (.xlsx / .xls)'}
-              </Btn>
-              <input ref={fileRef} type="file" accept=".xlsx,.xls" multiple style={{display:'none'}} onChange={handleFile}/>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
-              <Input label="PI Number"      value={piNum}      onChange={setPiNum}      placeholder="Auto-detectado" required/>
-              <Input label="Modelo de TV"   value={modelo}     onChange={setModelo}     placeholder="Auto-detectado o se pedirá" required/>
-              <Input label="Proveedor"      value={proveedor}  onChange={setProveedor}  placeholder="Auto-detectado"/>
-              <Input label="No. Contenedor" value={contenedor} onChange={setContenedor} placeholder="Auto-detectado"/>
-              <Input label="Unidades TV"    type="number" value={unidades} onChange={setUnidades} placeholder="5000"/>
-              <Input label="ETA"            type="date"   value={eta}     onChange={setEta}/>
-            </div>
-            <div style={{marginBottom:16}}>
-              <label style={{fontSize:12,color:'#666',fontWeight:500}}>Notas</label>
-              <textarea value={notas} onChange={e=>setNotas(e.target.value)} rows={2} placeholder="Observaciones..."
-                style={{width:'100%',boxSizing:'border-box',marginTop:4,padding:'8px 10px',borderRadius:8,
-                  border:'1px solid #ddd',fontSize:13,resize:'vertical',color:'#1a1a1a'}}/>
-            </div>
-            {preview.length>0&&(
-              <div style={{marginBottom:16}}>
-                <div style={{fontSize:12,color:'#666',marginBottom:8,fontWeight:500}}>
-                  {preview.length} contenedor(es) — {preview.reduce((a:number,s:any)=>a+s.items.length,0).toLocaleString()} partes únicas
+          <div style={{maxWidth:680}}>
+
+            {/* Paso 1: Identificación */}
+            <div style={{border:'0.5px solid #e0e0e0',borderRadius:10,padding:16,marginBottom:12}}>
+              <div style={{fontSize:11,fontWeight:500,color:'#888',textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:12}}>
+                Paso 1 — Identificación
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
+                <div>
+                  <label style={{fontSize:12,color:'#666',fontWeight:500,display:'block',marginBottom:4}}>
+                    Proveedor <span style={{color:'#A32D2D'}}>*</span>
+                  </label>
+                  <select value={proveedor} onChange={e=>setProveedor(e.target.value)}
+                    style={{width:'100%',padding:'8px 10px',borderRadius:8,border:`1px solid ${!proveedor?'#E24B4A':'#ddd'}`,fontSize:13,background:'#fff',color:'#1a1a1a'}}>
+                    <option value="">Selecciona proveedor...</option>
+                    <option value="KTC">KTC</option>
+                    <option value="Changhong">Changhong</option>
+                    <option value="MTC">MTC</option>
+                    <option value="TCL">TCL / MOKA</option>
+                    <option value="HKC">HKC</option>
+                  </select>
                 </div>
-                {preview.map((sheet:any,si:number)=>(
-                  <div key={si} style={{marginBottom:10,border:'1px solid #eee',borderRadius:8,overflow:'hidden'}}>
-                    <div style={{padding:'8px 12px',background:'#f9f9f9',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                      <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                        <Badge color="blue">{sheet.contenedor}</Badge>
-                        {sheet.comentario&&<Badge color="amber">{sheet.comentario}</Badge>}
-                        <span style={{fontSize:12,color:'#888'}}>{sheet.items.length} partes</span>
-                      </div>
-                      <div style={{display:'flex',gap:12,fontSize:12}}>
-                        <span style={{color:'#888'}}>{sheet.items.reduce((a:number,i:any)=>a+(i.qty||0),0).toLocaleString()} pzas</span>
-                        <span style={{color:'#3B6D11',fontWeight:500}}>${sheet.items.reduce((a:number,i:any)=>a+(i.totalAmount||0),0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                      </div>
-                    </div>
-                    <Table cols={[
-                      {key:'partNo',     label:'Part No'},
-                      {key:'desc',       label:'Descripción',render:(v:string)=><span style={{maxWidth:200,display:'inline-block',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{v}</span>},
-                      {key:'qty',        label:'Piezas',    render:(v:number)=><Badge color="blue">{(v||0).toLocaleString()}</Badge>},
-                      {key:'value',      label:'Unit Price', render:(v:number)=>v?`$${v.toFixed(4)}`:'—'},
-                      {key:'totalAmount',label:'Total',      render:(v:number)=>v?<span style={{color:'#3B6D11'}}>${v.toFixed(2)}</span>:'—'},
-                      {key:'um',         label:'UM'},
-                      {key:'country',    label:'Origen'},
-                    ]} rows={sheet.items}/>
-                  </div>
-                ))}
+                <div>
+                  <label style={{fontSize:12,color:'#666',fontWeight:500,display:'block',marginBottom:4}}>
+                    PI Number <span style={{color:'#A32D2D'}}>*</span>
+                  </label>
+                  <input value={piNum} onChange={e=>{setPiNum(e.target.value);checkPiDuplicado(e.target.value)}}
+                    placeholder="Ej: CO-PI2025113"
+                    style={{width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:8,
+                      border:`1px solid ${piDuplicado?'#E24B4A':!piNum?'#ddd':'#52A96E'}`,fontSize:13,color:'#1a1a1a'}}/>
+                  {piDuplicado&&<div style={{fontSize:11,color:'#A32D2D',marginTop:3}}>⚠ Este PI ya existe en el sistema</div>}
+                  {piNum&&!piDuplicado&&<div style={{fontSize:11,color:'#3B6D11',marginTop:3}}>✓ PI disponible</div>}
+                </div>
+                <div>
+                  <label style={{fontSize:12,color:'#666',fontWeight:500,display:'block',marginBottom:4}}>
+                    Modelo de TV <span style={{color:'#A32D2D'}}>*</span>
+                  </label>
+                  <input value={modelo} onChange={e=>setModelo(e.target.value)} placeholder="Ej: SI60URF"
+                    style={{width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:8,
+                      border:`1px solid ${!modelo?'#E24B4A':'#ddd'}`,fontSize:13,color:'#1a1a1a'}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:12,color:'#666',fontWeight:500,display:'block',marginBottom:4}}>
+                    ETA <span style={{color:'#A32D2D'}}>*</span>
+                  </label>
+                  <input type="date" value={eta} min={new Date().toISOString().slice(0,10)}
+                    onChange={e=>setEta(e.target.value)}
+                    style={{width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:8,
+                      border:`1px solid ${eta&&eta<new Date().toISOString().slice(0,10)?'#E24B4A':'#ddd'}`,fontSize:13,color:'#1a1a1a'}}/>
+                  {eta&&eta<new Date().toISOString().slice(0,10)&&
+                    <div style={{fontSize:11,color:'#A32D2D',marginTop:3}}>⚠ La ETA no puede ser una fecha pasada</div>}
+                </div>
+                <div>
+                  <label style={{fontSize:12,color:'#666',fontWeight:500,display:'block',marginBottom:4}}>Unidades TV</label>
+                  <input type="number" value={unidades} onChange={e=>setUnidades(e.target.value)} placeholder="3168"
+                    style={{width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:8,border:'1px solid #ddd',fontSize:13,color:'#1a1a1a'}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:12,color:'#666',fontWeight:500,display:'block',marginBottom:4}}>Notas</label>
+                  <input value={notas} onChange={e=>setNotas(e.target.value)} placeholder="Observaciones opcionales"
+                    style={{width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:8,border:'1px solid #ddd',fontSize:13,color:'#1a1a1a'}}/>
+                </div>
               </div>
-            )}
-            {preview.length>0&&(
-              <div style={{display:'flex',gap:10}}>
-                <Btn onClick={submitPI} disabled={loading} style={{background:ROLE_COLOR.CE,color:'#fff'}}>
-                  {loading?'Guardando...':'Registrar PI'}
+            </div>
+
+            {/* Paso 2: Cargar archivos */}
+            <div style={{border:'0.5px solid #e0e0e0',borderRadius:10,padding:16,marginBottom:12}}>
+              <div style={{fontSize:11,fontWeight:500,color:'#888',textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:12}}>
+                Paso 2 — Archivos Excel
+              </div>
+              {proveedor&&(
+                <div style={{background:'#E6F1FB',borderRadius:8,padding:'8px 12px',marginBottom:10,fontSize:12,color:'#0C447C'}}>
+                  {proveedor==='Changhong'&&'Changhong envía 2 archivos por PI — selecciónalos juntos con Cmd/Ctrl.'}
+                  {proveedor==='HKC'&&'HKC envía 2 archivos por PI (paneles + componentes) — selecciónalos juntos con Cmd/Ctrl.'}
+                  {(proveedor==='KTC'||proveedor==='MTC'||proveedor==='TCL')&&`${proveedor} envía 1 archivo por PI.`}
+                </div>
+              )}
+              <div style={{padding:14,border:'2px dashed #B5D4F4',borderRadius:10,textAlign:'center'}}>
+                <div style={{fontSize:13,color:'#666',marginBottom:10}}>
+                  {!proveedor?'Selecciona primero el proveedor':'Carga el Packing List — los datos se detectarán automáticamente'}
+                </div>
+                <Btn onClick={()=>proveedor&&fileRef.current?.click()} disabled={loading||!proveedor}
+                  style={{background:proveedor?ROLE_COLOR.CE:'#ccc',color:'#fff'}}>
+                  {loading?'Leyendo...':'Cargar Excel (.xlsx / .xls)'}
                 </Btn>
-                <Btn variant="secondary" onClick={limpiar}>Limpiar</Btn>
+                <input ref={fileRef} type="file" accept=".xlsx,.xls" multiple style={{display:'none'}} onChange={handleFile}/>
               </div>
-            )}
+            </div>
+            {/* Paso 3: Resumen financiero y validación */}
+            {preview.length>0&&(()=>{
+              const totalPiezas = preview.reduce((a:number,s:any)=>a+s.items.reduce((b:number,i:any)=>b+(i.qty||0),0),0)
+              const totalValor  = preview.reduce((a:number,s:any)=>a+s.items.reduce((b:number,i:any)=>b+(i.totalAmount||0),0),0)
+              const contsValor0 = preview.filter(s=>s.items.reduce((b:number,i:any)=>b+(i.totalAmount||0),0)===0)
+              const etaPasada   = eta && eta < new Date().toISOString().slice(0,10)
+              const bloqueado   = !piNum||!modelo||!proveedor||piDuplicado||!!etaPasada||contsValor0.length>0
+
+              return (
+                <div>
+                  {/* Métricas */}
+                  <div style={{border:'0.5px solid #e0e0e0',borderRadius:10,padding:16,marginBottom:12}}>
+                    <div style={{fontSize:11,fontWeight:500,color:'#888',textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:12}}>
+                      Paso 3 — Resumen financiero
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:12}}>
+                      {[
+                        {label:'Contenedores', val:String(preview.length)},
+                        {label:'Piezas totales', val:totalPiezas.toLocaleString()},
+                        {label:'Valor total', val:`$${totalValor.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`, color:'#3B6D11'},
+                      ].map(m=>(
+                        <div key={m.label} style={{background:'#f9f9f9',borderRadius:8,padding:'10px 12px'}}>
+                          <div style={{fontSize:11,color:'#888',marginBottom:2}}>{m.label}</div>
+                          <div style={{fontSize:18,fontWeight:500,color:m.color||'#1a1a1a'}}>{m.val}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Tabla por contenedor */}
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                      <thead><tr style={{borderBottom:'0.5px solid #eee',background:'#fafafa'}}>
+                        {['Contenedor','Partes','Piezas','Valor USD',''].map(h=>(
+                          <th key={h} style={{padding:'6px 10px',textAlign:h==='Valor USD'||h==='Piezas'?'right':'left',color:'#aaa',fontWeight:500}}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {preview.map((s:any,i:number)=>{
+                          const val = s.items.reduce((b:number,it:any)=>b+(it.totalAmount||0),0)
+                          const pzs = s.items.reduce((b:number,it:any)=>b+(it.qty||0),0)
+                          const ok  = val > 0
+                          return (
+                            <tr key={i} style={{borderBottom:'0.5px solid #f5f5f5',background:ok?'transparent':'#FFFBF5'}}>
+                              <td style={{padding:'7px 10px'}}><Badge color="teal">{s.contenedor}</Badge></td>
+                              <td style={{padding:'7px 10px',color:'#666'}}>{s.items.length}</td>
+                              <td style={{padding:'7px 10px',textAlign:'right',color:'#666'}}>{pzs.toLocaleString()}</td>
+                              <td style={{padding:'7px 10px',textAlign:'right',fontWeight:500,color:ok?'#3B6D11':'#A32D2D'}}>
+                                {ok?`$${val.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`:'$0.00 — revisar'}
+                              </td>
+                              <td style={{padding:'7px 10px',textAlign:'center'}}>{ok?'✓':'⚠'}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Revisión IA */}
+                  <div style={{border:'0.5px solid #e0e0e0',borderRadius:10,padding:16,marginBottom:12}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                      <div style={{fontSize:11,fontWeight:500,color:'#888',textTransform:'uppercase',letterSpacing:'0.05em'}}>
+                        Paso 4 — Revisión automática
+                      </div>
+                      {aiReview.status!=='loading'&&(
+                        <button onClick={runAiReview}
+                          style={{padding:'5px 12px',borderRadius:6,border:'0.5px solid #ddd',background:'#f9f9f9',
+                            fontSize:12,cursor:'pointer',color:'#1a1a1a'}}>
+                          {aiReview.status==='idle'?'Revisar con IA':'Volver a revisar'}
+                        </button>
+                      )}
+                    </div>
+                    {aiReview.status==='idle'&&(
+                      <div style={{fontSize:12,color:'#888',textAlign:'center',padding:'12px 0'}}>
+                        Haz clic en "Revisar con IA" para detectar posibles errores antes de registrar.
+                      </div>
+                    )}
+                    {aiReview.status==='loading'&&(
+                      <div style={{fontSize:12,color:'#888',textAlign:'center',padding:'12px 0'}}>
+                        Analizando datos...
+                      </div>
+                    )}
+                    {aiReview.status==='done'&&(
+                      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                        {aiReview.obs.map((o:any,i:number)=>{
+                          const bg = o.tipo==='ok'?'#EAF3DE':o.tipo==='error'?'#FCEBEB':'#FAEEDA'
+                          const tx = o.tipo==='ok'?'#27500A':o.tipo==='error'?'#791F1F':'#633806'
+                          const ic = o.tipo==='ok'?'✓':o.tipo==='error'?'✕':'!'
+                          return (
+                            <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'8px 10px',
+                              borderRadius:6,background:bg}}>
+                              <span style={{color:tx,fontWeight:500,minWidth:14,fontSize:12}}>{ic}</span>
+                              <span style={{fontSize:12,color:tx}}>{o.mensaje}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Alertas bloqueantes */}
+                  {contsValor0.length>0&&(
+                    <div style={{background:'#FCEBEB',borderRadius:8,padding:'10px 14px',marginBottom:10,fontSize:12,color:'#A32D2D'}}>
+                      ✕ {contsValor0.length} contenedor(es) con valor $0. Revisa el Packing List antes de continuar.
+                    </div>
+                  )}
+                  {etaPasada&&(
+                    <div style={{background:'#FCEBEB',borderRadius:8,padding:'10px 14px',marginBottom:10,fontSize:12,color:'#A32D2D'}}>
+                      ✕ La ETA no puede ser una fecha pasada.
+                    </div>
+                  )}
+                  {piDuplicado&&(
+                    <div style={{background:'#FCEBEB',borderRadius:8,padding:'10px 14px',marginBottom:10,fontSize:12,color:'#A32D2D'}}>
+                      ✕ El PI Number ya existe en el sistema.
+                    </div>
+                  )}
+
+                  <div style={{display:'flex',gap:10,alignItems:'center'}}>
+                    <Btn onClick={submitPI} disabled={loading||bloqueado}
+                      style={{background:bloqueado?'#ccc':ROLE_COLOR.CE,color:'#fff',cursor:bloqueado?'not-allowed':'pointer'}}>
+                      {loading?'Guardando...':'Registrar PI'}
+                    </Btn>
+                    <Btn variant="secondary" onClick={limpiar}>Limpiar</Btn>
+                    {bloqueado&&!loading&&(
+                      <span style={{fontSize:12,color:'#A32D2D'}}>Corrige los errores antes de registrar</span>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )}
       </div>
