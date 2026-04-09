@@ -1931,11 +1931,17 @@ function DISCView({ onBack, onLogout, userName, userRol }: {
 
   const loadData = async () => {
     setLoading(true)
-    const [{data:disc},{data:pisData}] = await Promise.all([
+    const [{data:disc},{data:pisData},{data:items}] = await Promise.all([
       supabase.from('discrepancias').select('*').order('created_at',{ascending:false}),
       supabase.from('pis').select('id,pi_number,modelo,contenedor,proveedor_id,proveedores(nombre)').eq('tipo','pi'),
+      supabase.from('packing_list_items').select('pi_id,part_no,valor_unitario,total_amount'),
     ])
-    setDiscrepancias(disc||[])
+    // Enriquecer discrepancias con valor_unitario de packing_list_items
+    const discEnriquecidas = (disc||[]).map((d:any) => {
+      const item = (items||[]).find((i:any) => i.part_no===d.part_no)
+      return { ...d, valor_unitario: d.valor_unitario || item?.valor_unitario || 0 }
+    })
+    setDiscrepancias(discEnriquecidas)
     setPIs(pisData||[])
     setLoading(false)
   }
