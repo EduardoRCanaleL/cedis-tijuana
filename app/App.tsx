@@ -659,8 +659,9 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
         <span style={{fontSize:14,fontWeight:600,color:'#1a1a1a'}}>CEDIS Tijuana</span>
         <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:500,background:ROLE_BG.CE,color:ROLE_TEXT.CE}}>Comercio Exterior</span>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
+          {onBack&&<button onClick={onBack} style={{padding:'5px 12px',borderRadius:8,border:'1px solid #ddd',background:'#f0f0f0',color:'#444',fontSize:12,fontWeight:500,cursor:'pointer',display:'flex',alignItems:'center',gap:4}}>← Inicio</button>}
           <Badge color="blue">PIs: {pis.length}</Badge>
-          {userName&&<UserMenu email={userName} rol={userRol||'CE'} onLogout={onLogout||onBack} onHome={onBack}/>}
+          {userName&&<UserMenu email={userName} rol={userRol||'CE'} onLogout={onLogout||onBack}/>}
         </div>
       </div>
       <div style={{padding:'16px 20px 0'}}>
@@ -841,6 +842,124 @@ function InventarioAgrupado({ inventario }: { inventario: any[] }) {
   )
 }
 
+// ── SOLICITUDES ALM (agrupado PI → Contenedor → Partes) ───────
+function SolicitudesALM({ solicitudes, loading, onEntregar }: {
+  solicitudes: any[], loading: boolean, onEntregar: (sol:any)=>void
+}) {
+  const [openSols, setOpenSols] = useState<Record<string,boolean>>({})
+  const [openPIs,  setOpenPIs]  = useState<Record<string,boolean>>({})
+
+  if (solicitudes.length===0) return (
+    <div style={{padding:24,textAlign:'center',color:'#bbb',fontSize:13}}>No hay solicitudes pendientes.</div>
+  )
+
+  return (
+    <div>
+      {solicitudes.map((sol:any)=>{
+        const total = (sol.solicitud_items||[]).reduce((a:number,i:any)=>a+i.qty,0)
+        const isOpen = openSols[sol.id]
+
+        // Agrupar items por PI base → contenedor
+        const byPI: Record<string,Record<string,any[]>> = {}
+        for (const item of sol.solicitud_items||[]) {
+          const parts   = item.pi_number?.split('-')||[]
+          const piBase  = parts.slice(0,-1).join('-')||item.pi_number
+          const cont    = parts[parts.length-1]||'—'
+          if (!byPI[piBase]) byPI[piBase]={}
+          if (!byPI[piBase][cont]) byPI[piBase][cont]=[]
+          byPI[piBase][cont].push(item)
+        }
+
+        return (
+          <div key={sol.id} style={{border:'0.5px solid #e0e0e0',borderRadius:10,marginBottom:10,overflow:'hidden'}}>
+            {/* Header solicitud */}
+            <div style={{padding:'12px 16px',background:'#f9f9f9',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',cursor:'pointer'}}
+              onClick={()=>setOpenSols(s=>({...s,[sol.id]:!s[sol.id]}))}>
+              <span style={{fontSize:11,color:'#aaa',minWidth:14}}>{isOpen?'▼':'▶'}</span>
+              <Badge color="purple">{sol.id?.slice(0,8).toUpperCase()}</Badge>
+              <Badge color="amber">Solicitado</Badge>
+              <span style={{fontSize:13,fontWeight:600,color:'#1a1a1a'}}>{sol.area}</span>
+              <span style={{fontSize:12,color:'#888'}}>{(sol.solicitud_items||[]).length} partes · {total.toLocaleString()} pzas</span>
+              {sol.notas&&<span style={{fontSize:12,color:'#888',fontStyle:'italic'}}>· {sol.notas}</span>}
+              <span style={{fontSize:12,color:'#888',marginLeft:'auto'}}>{new Date(sol.created_at).toLocaleString('es-MX')}</span>
+            </div>
+
+            {/* Detalle expandido: PI → Contenedor → Partes */}
+            {isOpen&&(
+              <div style={{borderTop:'0.5px solid #eee'}}>
+                {Object.entries(byPI).map(([piBase, contMap])=>{
+                  const piKey   = `${sol.id}-${piBase}`
+                  const isPIOpen = openPIs[piKey]
+                  const piTotal  = Object.values(contMap).flat().reduce((a:number,i:any)=>a+i.qty,0)
+
+                  return (
+                    <div key={piBase} style={{borderBottom:'0.5px solid #f0f0f0'}}>
+                      {/* Fila PI */}
+                      <div onClick={()=>setOpenPIs(s=>({...s,[piKey]:!s[piKey]}))}
+                        style={{padding:'8px 16px 8px 36px',display:'flex',gap:10,alignItems:'center',
+                          cursor:'pointer',background:'#fafafa',flexWrap:'wrap'}}
+                        onMouseEnter={e=>e.currentTarget.style.background='#f5f5f5'}
+                        onMouseLeave={e=>e.currentTarget.style.background='#fafafa'}>
+                        <span style={{fontSize:11,color:'#aaa',minWidth:14}}>{isPIOpen?'▼':'▶'}</span>
+                        <Badge color="blue">{piBase}</Badge>
+                        <span style={{fontSize:12,color:'#888'}}>{Object.keys(contMap).length} contenedor{Object.keys(contMap).length!==1?'es':''}</span>
+                        <span style={{fontSize:12,color:'#888',marginLeft:'auto'}}>{piTotal.toLocaleString()} pzas</span>
+                      </div>
+
+                      {/* Contenedores */}
+                      {isPIOpen&&Object.entries(contMap).map(([cont, items])=>(
+                        <div key={cont} style={{borderTop:'0.5px solid #f0f0f0'}}>
+                          {/* Fila Contenedor */}
+                          <div style={{padding:'6px 16px 6px 60px',display:'flex',gap:10,
+                            alignItems:'center',background:'#fdfdfd',flexWrap:'wrap'}}>
+                            <Badge color="teal">{cont}</Badge>
+                            <span style={{fontSize:12,color:'#888'}}>{items.length} parte{items.length!==1?'s':''}</span>
+                            <span style={{fontSize:12,color:'#888',marginLeft:'auto'}}>
+                              {items.reduce((a:number,i:any)=>a+i.qty,0).toLocaleString()} pzas
+                            </span>
+                          </div>
+                          {/* Tabla partes */}
+                          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                            <thead><tr style={{background:'#f9f9f9',borderBottom:'0.5px solid #eee'}}>
+                              {['Part No','Descripción','Cantidad','UM'].map(h=>(
+                                <th key={h} style={{padding:'5px 16px 5px 76px',textAlign:'left',
+                                  color:'#aaa',fontWeight:500,whiteSpace:'nowrap',
+                                  paddingLeft:h==='Part No'?76:12}}>{h}</th>
+                              ))}
+                            </tr></thead>
+                            <tbody>
+                              {items.map((item:any,i:number)=>(
+                                <tr key={i} style={{borderBottom:'0.5px solid #f5f5f5'}}>
+                                  <td style={{padding:'7px 12px 7px 76px',fontFamily:'monospace',fontSize:11,color:'#555'}}>{item.part_no}</td>
+                                  <td style={{padding:'7px 12px'}}><span style={{display:'block',maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.descripcion}</span></td>
+                                  <td style={{padding:'7px 12px',fontWeight:500}}>{item.qty?.toLocaleString()}</td>
+                                  <td style={{padding:'7px 12px',color:'#888'}}>{item.um}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
+
+                {/* Botón entregar */}
+                <div style={{padding:'12px 16px',borderTop:'0.5px solid #eee',display:'flex',justifyContent:'flex-end'}}>
+                  <Btn onClick={()=>onEntregar(sol)} disabled={loading}
+                    style={{background:ROLE_COLOR.ALM,color:'#fff'}}>
+                    Marcar como entregado
+                  </Btn>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── ALMACÉN ───────────────────────────────────────────────────
 function ALMView({ onBack, onLogout, initialTab, userName, userRol }: { onBack: ()=>void, onLogout?: ()=>void, initialTab?: string, userName?: string, userRol?: string }) {
   const [tab, setTab]               = useState(initialTab||'pendientes')
@@ -941,7 +1060,8 @@ function ALMView({ onBack, onLogout, initialTab, userName, userRol }: { onBack: 
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
           <Badge color="green">Stock: {inventario.reduce((a,i)=>a+i.qty_disponible,0).toLocaleString()}</Badge>
           <Badge color="amber">Pendientes: {pendientes.length}</Badge>
-          {userName&&<UserMenu email={userName} rol={userRol||'ALM'} onLogout={onLogout||onBack} onHome={onBack}/>}
+          {onBack&&<button onClick={onBack} style={{padding:'5px 12px',borderRadius:8,border:'1px solid #ddd',background:'#f0f0f0',color:'#444',fontSize:12,fontWeight:500,cursor:'pointer',display:'flex',alignItems:'center',gap:4}}>← Inicio</button>}
+          {userName&&<UserMenu email={userName} rol={userRol||'ALM'} onLogout={onLogout||onBack}/>}
         </div>
       </div>
       <div style={{padding:'16px 20px 0'}}>
@@ -1167,33 +1287,11 @@ function ALMView({ onBack, onLogout, initialTab, userName, userRol }: { onBack: 
         )}
 
         {tab==='solicitudes'&&(
-          <div>
-            {solicitudes.length===0?<div style={{padding:24,textAlign:'center',color:'#bbb',fontSize:13}}>No hay solicitudes pendientes.</div>
-            :solicitudes.map((sol:any)=>{
-              const total=(sol.solicitud_items||[]).reduce((a:number,i:any)=>a+i.qty,0)
-              return (
-                <div key={sol.id} style={{border:'1px solid #eee',borderRadius:10,padding:14,marginBottom:10}}>
-                  <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>
-                    <Badge color="purple">{sol.id?.slice(0,8).toUpperCase()}</Badge>
-                    <Badge color="amber">Solicitado</Badge>
-                    <span style={{fontSize:13,fontWeight:500}}>{sol.area}</span>
-                    <span style={{fontSize:12,color:'#888'}}>{(sol.solicitud_items||[]).length} partes · {total.toLocaleString()} pzas</span>
-                    <span style={{fontSize:12,color:'#888',marginLeft:'auto'}}>{new Date(sol.created_at).toLocaleString('es-MX')}</span>
-                  </div>
-                  {sol.notas&&<div style={{fontSize:12,color:'#888',marginBottom:8,fontStyle:'italic'}}>{sol.notas}</div>}
-                  <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
-                    {(sol.solicitud_items||[]).map((item:any,i:number)=>(
-                      <div key={i} style={{padding:'3px 8px',borderRadius:6,background:'#f5f5f5',fontSize:11}}>
-                        <span style={{fontFamily:'monospace'}}>{item.part_no}</span>
-                        <span style={{color:'#888'}}> · {item.qty?.toLocaleString()}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <Btn onClick={()=>entregarSolicitud(sol)} disabled={loading} style={{background:ROLE_COLOR.ALM,color:'#fff'}}>Marcar como entregado</Btn>
-                </div>
-              )
-            })}
-          </div>
+          <SolicitudesALM
+            solicitudes={solicitudes}
+            loading={loading}
+            onEntregar={entregarSolicitud}
+          />
         )}
         {tab==='recibidos'&&(
           <Table cols={[
@@ -1301,7 +1399,8 @@ function PRODView({ onBack, onLogout, userName, userRol }: { onBack: ()=>void, o
         <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:500,background:ROLE_BG.PROD,color:ROLE_TEXT.PROD}}>Producción</span>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
           <Badge color="purple">Solicitudes: {solicitudes.length}</Badge>
-          {userName&&<UserMenu email={userName} rol={userRol||'PROD'} onLogout={onLogout||onBack} onHome={onBack}/>}
+          {onBack&&<button onClick={onBack} style={{padding:'5px 12px',borderRadius:8,border:'1px solid #ddd',background:'#f0f0f0',color:'#444',fontSize:12,fontWeight:500,cursor:'pointer',display:'flex',alignItems:'center',gap:4}}>← Inicio</button>}
+          {userName&&<UserMenu email={userName} rol={userRol||'PROD'} onLogout={onLogout||onBack}/>}
         </div>
       </div>
       <div style={{padding:'16px 20px 0'}}>
@@ -1516,7 +1615,7 @@ function PRODView({ onBack, onLogout, userName, userRol }: { onBack: ()=>void, o
 }
 
 // ── USER MENU ─────────────────────────────────────────────────
-function UserMenu({ email, rol, onLogout, onHome }: { email: string, rol: string, onLogout: ()=>void, onHome?: ()=>void }) {
+function UserMenu({ email, rol, onLogout }: { email: string, rol: string, onLogout: ()=>void }) {
   const [open,        setOpen]        = useState(false)
   const [showPwd,     setShowPwd]     = useState(false)
   const [pwdActual,   setPwdActual]   = useState('')
@@ -1581,18 +1680,7 @@ function UserMenu({ email, rol, onLogout, onHome }: { email: string, rol: string
             {/* Opciones */}
             {!showPwd&&(
               <div>
-                {onHome&&(
-                  <>
-                    <button onClick={()=>{setOpen(false);onHome()}}
-                      style={{width:'100%',padding:'11px 16px',border:'none',background:'transparent',
-                        textAlign:'left',fontSize:13,color:'#1a1a1a',cursor:'pointer',display:'flex',gap:8,alignItems:'center'}}
-                      onMouseEnter={e=>e.currentTarget.style.background='#f5f5f5'}
-                      onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
-                      ← Inicio
-                    </button>
-                    <div style={{borderTop:'0.5px solid #eee'}}/>
-                  </>
-                )}
+
                 <button onClick={()=>setShowPwd(true)}
                   style={{width:'100%',padding:'11px 16px',border:'none',background:'transparent',
                     textAlign:'left',fontSize:13,color:'#1a1a1a',cursor:'pointer',display:'flex',gap:8,alignItems:'center'}}
@@ -1931,17 +2019,11 @@ function DISCView({ onBack, onLogout, userName, userRol }: {
 
   const loadData = async () => {
     setLoading(true)
-    const [{data:disc},{data:pisData},{data:items}] = await Promise.all([
+    const [{data:disc},{data:pisData}] = await Promise.all([
       supabase.from('discrepancias').select('*').order('created_at',{ascending:false}),
       supabase.from('pis').select('id,pi_number,modelo,contenedor,proveedor_id,proveedores(nombre)').eq('tipo','pi'),
-      supabase.from('packing_list_items').select('pi_id,part_no,valor_unitario,total_amount'),
     ])
-    // Enriquecer discrepancias con valor_unitario de packing_list_items
-    const discEnriquecidas = (disc||[]).map((d:any) => {
-      const item = (items||[]).find((i:any) => i.part_no===d.part_no)
-      return { ...d, valor_unitario: d.valor_unitario || item?.valor_unitario || 0 }
-    })
-    setDiscrepancias(discEnriquecidas)
+    setDiscrepancias(disc||[])
     setPIs(pisData||[])
     setLoading(false)
   }
@@ -2003,7 +2085,8 @@ function DISCView({ onBack, onLogout, userName, userRol }: {
         <span style={{fontSize:14,fontWeight:600,color:'#1a1a1a'}}>CEDIS Tijuana</span>
         <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:500,background:'#FCEBEB',color:'#A32D2D'}}>Discrepancias</span>
         <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
-          {userName&&<UserMenu email={userName} rol={userRol||'DISC'} onLogout={onLogout||onBack} onHome={onBack}/>}
+          {onBack&&<button onClick={onBack} style={{padding:'5px 12px',borderRadius:8,border:'1px solid #ddd',background:'#f0f0f0',color:'#444',fontSize:12,fontWeight:500,cursor:'pointer',display:'flex',alignItems:'center',gap:4}}>← Inicio</button>}
+          {userName&&<UserMenu email={userName} rol={userRol||'DISC'} onLogout={onLogout||onBack}/>}
         </div>
       </div>
 
