@@ -875,7 +875,6 @@ Fecha hoy: ${today}`}]
                   <span>Las unidades ingresadas <strong>{unidades}</strong> difieren más del 10% de las esperadas en catálogo <strong>{catMatch.piezas.toLocaleString()}</strong>.</span>
                 </div>
               )}
-              </div>
             </div>
 
             {/* Paso 2: Cargar archivos */}
