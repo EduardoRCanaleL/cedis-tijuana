@@ -333,6 +333,20 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
     'MTC':'1 archivo','TCL / MOKA':'1 archivo','HKC':'2 archivos — cárgalos juntos'
   }
 
+  const loadPIs = async () => {
+    const [{ data }, { data: catData }] = await Promise.all([
+      supabase.from('pis_resumen').select('*').order('created_at',{ascending:false}),
+      supabase.from('pi_catalog').select('*').eq('activo',true).order('pi_number'),
+    ])
+    setPIs((data||[]).map((pi:any)=>({
+      ...pi,
+      _piezas: pi.total_piezas || 0,
+      _valor:  pi.total_valor  || 0,
+    })))
+    setCatalog(catData||[])
+  }
+  useEffect(()=>{ loadPIs() },[])
+
   const checkPiDuplicado = async (val: string) => {
     if (!val.trim()) { setPiDuplicado(false); setCatMatch(null); return }
     const {data} = await supabase.from('pis').select('id').ilike('pi_number',`${val.trim()}-%`).limit(1)
