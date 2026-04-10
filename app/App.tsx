@@ -334,9 +334,17 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
   }
 
   const checkPiDuplicado = async (val: string) => {
-    if (!val.trim()) { setPiDuplicado(false); return }
+    if (!val.trim()) { setPiDuplicado(false); setCatMatch(null); return }
     const {data} = await supabase.from('pis').select('id').ilike('pi_number',`${val.trim()}-%`).limit(1)
     setPiDuplicado(!!(data&&data.length>0))
+    // Buscar en catálogo
+    const match = catalog.find(c=>c.pi_number.trim().toUpperCase()===val.trim().toUpperCase())
+    setCatMatch(match||null)
+    if (match) {
+      if (!modelo) setModelo(match.modelo.trim())
+      if (!proveedor) setProveedor(match.vendor==='MTC ELECTRONICS'?'MTC':match.vendor==='CHANGHONG'?'Changhong':match.vendor==='TCL'?'TCL':match.vendor)
+      if (!unidades) setUnidades(String(match.piezas))
+    }
   }
 
   const runAiReview = async (previewData: any[], piNumVal: string, modeloVal: string, provVal: string, etaVal: string, unidadesVal: string) => {
@@ -393,15 +401,16 @@ Si todo está bien, responde: {"observaciones": [], "bloqueantes": [], "ok": tru
   const fileRef = useRef<HTMLInputElement>(null)
 
   const loadPIs = async () => {
-    const { data } = await supabase
-      .from('pis_resumen')
-      .select('*')
-      .order('created_at',{ascending:false})
+    const [{ data }, { data: catData }] = await Promise.all([
+      supabase.from('pis_resumen').select('*').order('created_at',{ascending:false}),
+      supabase.from('pi_catalog').select('*').eq('activo',true).order('pi_number'),
+    ])
     setPIs((data||[]).map((pi:any)=>({
       ...pi,
       _piezas: pi.total_piezas || 0,
       _valor:  pi.total_valor  || 0,
     })))
+    setCatalog(catData||[])
   }
   useEffect(()=>{ loadPIs() },[])
 
@@ -824,7 +833,8 @@ Fecha hoy: ${today}`}]
                     style={{width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:8,
                       border:`1px solid ${piDuplicado?'#E24B4A':!piNum?'#ddd':'#52A96E'}`,fontSize:13,color:'#1a1a1a'}}/>
                   {piDuplicado&&<div style={{fontSize:11,color:'#A32D2D',marginTop:3}}>⚠ Este PI ya existe en el sistema</div>}
-                  {piNum&&!piDuplicado&&<div style={{fontSize:11,color:'#3B6D11',marginTop:3}}>✓ PI disponible</div>}
+                  {piNum&&!piDuplicado&&catMatch&&<div style={{fontSize:11,color:'#3B6D11',marginTop:3}}>✓ En catálogo: {catMatch.vendor} · {catMatch.modelo} · {catMatch.piezas.toLocaleString()} pzas</div>}
+                  {piNum&&!piDuplicado&&!catMatch&&<div style={{fontSize:11,color:'#854F0B',marginTop:3}}>⚠ PI no encontrado en catálogo — verifica con tu supervisor</div>}
                 </div>
                 <div>
                   <label style={{fontSize:12,color:'#666',fontWeight:500,display:'block',marginBottom:4}}>
@@ -855,6 +865,20 @@ Fecha hoy: ${today}`}]
                   <input value={notas} onChange={e=>setNotas(e.target.value)} placeholder="Observaciones opcionales"
                     style={{width:'100%',boxSizing:'border-box',padding:'8px 10px',borderRadius:8,border:'1px solid #ddd',fontSize:13,color:'#1a1a1a'}}/>
                 </div>
+              </div>
+              {/* Alerta catálogo */}
+              {catMatch&&modelo&&catMatch.modelo.trim().toUpperCase()!==modelo.trim().toUpperCase()&&(
+                <div style={{background:'#FAEEDA',borderRadius:8,padding:'8px 12px',fontSize:12,color:'#633806',display:'flex',gap:8,alignItems:'center'}}>
+                  <span>⚠</span>
+                  <span>El modelo ingresado <strong>{modelo}</strong> no coincide con el catálogo <strong>{catMatch.modelo.trim()}</strong> — verifica antes de continuar.</span>
+                </div>
+              )}
+              {catMatch&&unidades&&Math.abs(parseInt(unidades)-catMatch.piezas)/catMatch.piezas>0.1&&(
+                <div style={{background:'#FAEEDA',borderRadius:8,padding:'8px 12px',marginTop:6,fontSize:12,color:'#633806',display:'flex',gap:8,alignItems:'center'}}>
+                  <span>⚠</span>
+                  <span>Las unidades ingresadas <strong>{unidades}</strong> difieren más del 10% de las esperadas en catálogo <strong>{catMatch.piezas.toLocaleString()}</strong>.</span>
+                </div>
+              )}
               </div>
             </div>
 
