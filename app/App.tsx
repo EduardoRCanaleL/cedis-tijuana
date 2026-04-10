@@ -325,6 +325,7 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
   const [aiReview, setAiReview]   = useState<{loading:boolean, obs:any[]}>({loading:false, obs:[]})
   const [proveedorSel, setProveedorSel] = useState('')
   const [catalog,   setCatalog]   = useState<any[]>([])
+  const fileRef = useRef<HTMLInputElement>(null)
   const [catMatch,  setCatMatch]  = useState<any|null>(null)
 
   const PROVEEDORES = ['KTC','Changhong','MTC','TCL / MOKA','HKC']
