@@ -337,12 +337,14 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
     if (!val.trim()) { setPiDuplicado(false); setCatMatch(null); return }
     const {data} = await supabase.from('pis').select('id').ilike('pi_number',`${val.trim()}-%`).limit(1)
     setPiDuplicado(!!(data&&data.length>0))
-    // Buscar en catálogo
-    const match = catalog.find(c=>c.pi_number.trim().toUpperCase()===val.trim().toUpperCase())
+    // Buscar en catálogo — consulta directa para evitar race condition
+    const {data:catData} = await supabase.from('pi_catalog').select('*').ilike('pi_number',val.trim()).limit(1)
+    const match = catData&&catData.length>0 ? catData[0] : null
     setCatMatch(match||null)
     if (match) {
+      const vendorMap: Record<string,string> = {'MTC ELECTRONICS':'MTC','CHANGHONG':'Changhong','TCL':'TCL','HKC':'HKC','KTC':'KTC'}
       if (!modelo) setModelo(match.modelo.trim())
-      if (!proveedor) setProveedor(match.vendor==='MTC ELECTRONICS'?'MTC':match.vendor==='CHANGHONG'?'Changhong':match.vendor==='TCL'?'TCL':match.vendor)
+      if (!proveedor) setProveedor(vendorMap[match.vendor.toUpperCase()]||match.vendor)
       if (!unidades) setUnidades(String(match.piezas))
     }
   }
@@ -636,12 +638,6 @@ Si todo está bien, responde: {"observaciones": [], "bloqueantes": [], "ok": tru
     } catch(err:any) { alert('Error al leer: '+err.message) }
     setLoading(false)
     if (e.target) e.target.value=''
-  }
-
-  const checkPiDuplicado = async (val: string) => {
-    if (!val.trim()) { setPiDuplicado(false); return }
-    const {data} = await supabase.from('pis').select('id').ilike('pi_number',`${val.trim()}-%`).limit(1)
-    setPiDuplicado((data||[]).length > 0)
   }
 
   const runAiReview = async () => {
