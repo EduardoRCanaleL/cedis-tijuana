@@ -338,7 +338,7 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
     const {data} = await supabase.from('pis').select('id').ilike('pi_number',`${val.trim()}-%`).limit(1)
     setPiDuplicado(!!(data&&data.length>0))
     // Buscar en catálogo — consulta directa para evitar race condition
-    const {data:catData} = await supabase.from('pi_catalog').select('*').ilike('pi_number',val.trim()).limit(1)
+    const {data:catData} = await supabase.from('pi_catalog').select('*').ilike('pi_number',`%${val.trim()}%`).limit(1)
     const match = catData&&catData.length>0 ? catData[0] : null
     setCatMatch(match||null)
     if (match) {
