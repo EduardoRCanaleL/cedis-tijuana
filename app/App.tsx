@@ -351,7 +351,7 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
 
   const runAiReview = async () => {
     if (!preview.length) return
-    setAiReview({status:'loading', obs:[]})
+    setAiReview({loading:true, obs:[]})
     try {
       const today = new Date().toISOString().slice(0,10)
       const resumen = {
@@ -380,9 +380,9 @@ Fecha hoy: ${today}`}]
       const text = d.content?.[0]?.text||'[]'
       const clean = text.replace(/```json|```/g,'').trim()
       const obs = JSON.parse(clean)
-      setAiReview({status:'done', obs})
+      setAiReview({loading:false, obs})
     } catch {
-      setAiReview({status:'done', obs:[{tipo:'advertencia',mensaje:'No se pudo completar la revisión automática. Verifica los datos manualmente.'}]})
+      setAiReview({loading:false, obs:[{tipo:'advertencia',mensaje:'No se pudo completar la revisión automática. Verifica los datos manualmente.'}]})
     }
   }
 
@@ -670,25 +670,25 @@ Fecha hoy: ${today}`}]
                       <div style={{fontSize:11,fontWeight:500,color:'#888',textTransform:'uppercase',letterSpacing:'0.05em'}}>
                         Paso 4 — Revisión automática
                       </div>
-                      {aiReview.status!=='loading'&&(
+                      {!aiReview.loading&&(
                         <button onClick={runAiReview}
                           style={{padding:'5px 12px',borderRadius:6,border:'0.5px solid #ddd',background:'#f9f9f9',
                             fontSize:12,cursor:'pointer',color:'#1a1a1a'}}>
-                          {aiReview.status==='idle'?'Revisar con IA':'Volver a revisar'}
+                          {!aiReview.loading&&aiReview.obs.length===0?'Revisar con IA':'Volver a revisar'}
                         </button>
                       )}
                     </div>
-                    {aiReview.status==='idle'&&(
+                    {!aiReview.loading&&aiReview.obs.length===0&&(
                       <div style={{fontSize:12,color:'#888',textAlign:'center',padding:'12px 0'}}>
                         Haz clic en "Revisar con IA" para detectar posibles errores antes de registrar.
                       </div>
                     )}
-                    {aiReview.status==='loading'&&(
+                    {aiReview.loading&&(
                       <div style={{fontSize:12,color:'#888',textAlign:'center',padding:'12px 0'}}>
                         Analizando datos...
                       </div>
                     )}
-                    {aiReview.status==='done'&&(
+                    {!aiReview.loading&&aiReview.obs.length>0&&(
                       <div style={{display:'flex',flexDirection:'column',gap:6}}>
                         {aiReview.obs.map((o:any,i:number)=>{
                           const bg = o.tipo==='ok'?'#EAF3DE':o.tipo==='error'?'#FCEBEB':'#FAEEDA'
