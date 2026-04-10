@@ -322,7 +322,7 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
   const [unidades, setUnidades]   = useState('')
   const [notas, setNotas]         = useState('')
   const [piDuplicado, setPiDuplicado] = useState(false)
-  const [aiReview, setAiReview]   = useState<{loading:boolean, obs:string[]}>({loading:false, obs:[]})
+  const [aiReview, setAiReview]   = useState<{loading:boolean, obs:any[]}>({loading:false, obs:[]})
   const [proveedorSel, setProveedorSel] = useState('')
   const [catalog,   setCatalog]   = useState<any[]>([])
   const [catMatch,  setCatMatch]  = useState<any|null>(null)
