@@ -378,8 +378,7 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
                 if(cn.includes('totalqty')||cn.includes('totalsets')){const n=Number(nv.replace(/,/g,''));if(n>100)dUnidades=String(n)}
                 const qm=cell.match(/(\d[\d,]+)\s*(EA|SETS|PCS|UNITS)/i);if(qm){const n=Number(qm[1].replace(/,/g,''));if(n>100&&n<100000)dUnidades=String(n)}
               }
-              if(!dProveedor&&i<8){const kw=['co.,ltd','technology','electronics','trading','corp','limited','shenzhen'];if(kw.some(k=>cell.toLowerCase().includes(k))&&cell.length>8&&cell.length<300)dProveedor=cell.split('
-')[0].trim()}
+              if(!dProveedor&&i<8){const kw=['co.,ltd','technology','electronics','trading','corp','limited','shenzhen'];if(kw.some(k=>cell.toLowerCase().includes(k))&&cell.length>8&&cell.length<300)dProveedor=cell.split('\n')[0].trim()}
               if(!dEta&&(cn.includes('eta')||cn.includes('etd')||cn==='date')){const p=parseDate(nv);if(p)dEta=p}
             }
           }
