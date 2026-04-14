@@ -364,8 +364,7 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
             for (let j=0; j<row.length; j++) {
               const cell = String(row[j]??'').trim()
               if (!cell) continue
-              const cn = cell.toLowerCase().replace(/[\s:#
-]/g,'')
+              const cn = cell.toLowerCase().replace(/[\s:#\n]/g,'')
               const nv = [row[j+1],row[j+2],row[j+3],row[j+4]].map(v=>String(v??'').trim()).filter(v=>v.length>1)[0]||''
               if (!dPI&&(cn==='sr'||cn==='sr#')){const v=nv.replace(/^PI#/i,'').trim();if(/[A-Z]{2,}.*\d{4,}/i.test(v))dPI=v}
               if (!dPI&&(cn==='pi'||cn==='pi#')){const v=nv.replace(/^PI#/i,'').trim();if(/[A-Z]{2,}.*\d{4,}/i.test(v))dPI=v}
