@@ -333,6 +333,87 @@ function CEView({ onBack, onLogout, onGoToFaltantes, userName, userRol }: { onBa
     'MTC':'1 archivo','TCL / MOKA':'1 archivo','HKC':'2 archivos — cárgalos juntos'
   }
 
+
+  const loadPIs = async () => {
+    const [{ data }, { data: catData }] = await Promise.all([
+      supabase.from('pis_resumen').select('*').order('created_at',{ascending:false}),
+      supabase.from('pi_catalog').select('*').order('pi_number'),
+    ])
+    setPIs((data||[]).map((pi:any)=>({...pi, _piezas:pi.total_piezas||0, _valor:pi.total_valor||0})))
+    setCatalog(catData||[])
+  }
+  useEffect(()=>{ loadPIs() },[])
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files||[])
+    if (!files.length) return
+    setLoading(true)
+    try {
+      const allSheets: any[] = []
+      let dPI='', dModelo='', dProveedor='', dEta='', dUnidades=''
+      for (const f of files) {
+        const buf = await f.arrayBuffer()
+        const wb  = XLSX.read(buf,{type:'array'})
+        for (const sheetName of wb.SheetNames) {
+          if (isChinese(sheetName)) continue
+          const onlyMeta = META_ONLY_SHEETS.includes(sheetName.toLowerCase().trim())
+          const aoa: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{header:1,defval:''})
+          if (aoa.length < 2) continue
+          for (let i=0; i<Math.min(40,aoa.length); i++) {
+            const row = aoa[i]
+            for (let j=0; j<row.length; j++) {
+              const cell = String(row[j]??'').trim()
+              if (!cell) continue
+              const cn = cell.toLowerCase().replace(/[\s:#
+]/g,'')
+              const nv = [row[j+1],row[j+2],row[j+3],row[j+4]].map(v=>String(v??'').trim()).filter(v=>v.length>1)[0]||''
+              if (!dPI&&(cn==='sr'||cn==='sr#')){const v=nv.replace(/^PI#/i,'').trim();if(/[A-Z]{2,}.*\d{4,}/i.test(v))dPI=v}
+              if (!dPI&&(cn==='pi'||cn==='pi#')){const v=nv.replace(/^PI#/i,'').trim();if(/[A-Z]{2,}.*\d{4,}/i.test(v))dPI=v}
+              if (!dPI&&cn.includes('invoiceno')){const v=nv.replace(/\s+/g,'');if(/[A-Z]{2,}[-]?\d{4,}/i.test(v))dPI=v}
+              if (!dModelo){
+                if(cn==='model'||cn==='modelo'||cn.includes('modelno')){const c=nv.replace(/\(.*\)/g,'').trim().toUpperCase();if(c.length>1&&c.length<50&&!isChinese(nv)&&/[A-Z]/.test(c))dModelo=c}
+                if(!dModelo&&!isChinese(cell)){const mm=cell.match(/(SI\d{2,3}URF?|SI\d{2,3}UR)/i);if(mm)dModelo=mm[0].toUpperCase()}
+                if(!dModelo){const mm=cell.match(/MODEL\s*NO\.?\s*[:\s]+([A-Z][A-Z0-9]+UR[F]?)/i);if(mm&&!isChinese(mm[1]))dModelo=mm[1].toUpperCase()}
+              }
+              if(!dUnidades){
+                if(cn.includes('totalqty')||cn.includes('totalsets')){const n=Number(nv.replace(/,/g,''));if(n>100)dUnidades=String(n)}
+                const qm=cell.match(/(\d[\d,]+)\s*(EA|SETS|PCS|UNITS)/i);if(qm){const n=Number(qm[1].replace(/,/g,''));if(n>100&&n<100000)dUnidades=String(n)}
+              }
+              if(!dProveedor&&i<8){const kw=['co.,ltd','technology','electronics','trading','corp','limited','shenzhen'];if(kw.some(k=>cell.toLowerCase().includes(k))&&cell.length>8&&cell.length<300)dProveedor=cell.split('
+')[0].trim()}
+              if(!dEta&&(cn.includes('eta')||cn.includes('etd')||cn==='date')){const p=parseDate(nv);if(p)dEta=p}
+            }
+          }
+          if(onlyMeta)continue
+          let headerIdx=0,bestScore=-1
+          for(let i=0;i<Math.min(40,aoa.length);i++){const txt=aoa[i].map((c:any)=>String(c).toLowerCase()).join(' ');const score=KEYWORDS.filter(k=>txt.includes(k)).length*3+aoa[i].filter((c:any)=>String(c).trim()!=='').length;if(score>bestScore){bestScore=score;headerIdx=i}}
+          const headers=aoa[headerIdx].map((h:any)=>String(h??'').trim().replace(/
+/g,' '))
+          const fieldIdx=buildFieldIdx(headers)
+          const get=(row:any[],f:string)=>fieldIdx[f]>=0?String(row[fieldIdx[f]]??'').trim():''
+          const dataRows=aoa.slice(headerIdx+1).filter(row=>row.some((c:any)=>String(c).trim()!==''))
+          if(!dPI&&fieldIdx['piCol']>=0){for(const row of dataRows){const v=String(row[fieldIdx['piCol']]??'').trim().replace(/^PI#/i,'');if(/[A-Z]{2,}.*\d{4,}/i.test(v)){dPI=v;break}}}
+          if(fieldIdx['containerCol']>=0){
+            const byContainer:Record<string,Record<string,any>>={}
+            for(const row of dataRows){const contVal=String(row[fieldIdx['containerCol']]??'').trim();if(!contVal)continue;const cvL=contVal.toLowerCase();if(cvL.includes('total')||cvL.includes('container'))continue;const pn=get(row,'partNo');const ds=get(row,'desc');const qty=Math.round(Number(get(row,'qty').replace(/,/g,''))||0);if((!pn&&!ds)||qty===0)continue;if(SKIP_WORDS.some(w=>(pn+ds).toLowerCase().includes(w)))continue;const unitPrice=parseFloat(get(row,'value').replace(/[$,]/g,''))||0;const rowTotal=unitPrice*qty;if(!byContainer[contVal])byContainer[contVal]={};const key=pn||ds;if(byContainer[contVal][key]){byContainer[contVal][key].qty+=qty;byContainer[contVal][key].totalAmount+=rowTotal}else{byContainer[contVal][key]={partNo:pn,desc:ds,descCN:get(row,'descCN'),qty,um:get(row,'um')||'PCS',cartonRef:get(row,'cartonRef'),qtyBox:Math.round(Number(get(row,'qtyBox').replace(/,/g,''))||0),qtyPerBox:Math.round(Number(get(row,'qtyPerBox').replace(/,/g,''))||0),netWeight:parseFloat(get(row,'netWeight').replace(/,/g,''))||0,grsWeight:parseFloat(get(row,'grsWeight').replace(/,/g,''))||0,value:unitPrice,totalAmount:rowTotal,cbm:parseFloat(get(row,'cbm').replace(/,/g,''))||0,country:get(row,'country')||'CHINA'}}}
+            for(const[cont,partsMap]of Object.entries(byContainer)){const items=Object.values(partsMap);if(!items.length)continue;const m=cont.match(/([A-Z]{2,6}\d{5,})/i);allSheets.push({sheetName:cont,contenedor:m?m[1].toUpperCase():cont.toUpperCase(),comentario:null,items})}
+          }else{
+            const items=dataRows.map((row:any[])=>{const pn=get(row,'partNo');const ds=get(row,'desc');const qty=Math.round(Number(get(row,'qty').replace(/,/g,''))||0);const cartonVal=get(row,'cartonRef');if(isSkipRow(pn,ds,cartonVal))return null;const unitPrice=parseFloat(get(row,'value').replace(/[$,]/g,''))||0;const totalRaw=parseFloat(get(row,'totalAmount').replace(/[$,]/g,''))||0;return{partNo:pn,desc:ds,descCN:get(row,'descCN'),qty,um:get(row,'um')||'PCS',cartonRef:cartonVal,qtyBox:Math.round(Number(get(row,'qtyBox').replace(/,/g,''))||0),qtyPerBox:Math.round(Number(get(row,'qtyPerBox').replace(/,/g,''))||0),netWeight:parseFloat(get(row,'netWeight').replace(/,/g,''))||0,grsWeight:parseFloat(get(row,'grsWeight').replace(/,/g,''))||0,value:unitPrice,totalAmount:totalRaw||(unitPrice*qty),cbm:parseFloat(get(row,'cbm').replace(/,/g,''))||0,country:get(row,'country')||'CHINA'}}).filter(Boolean)
+            if(items.length>0){const{contenedor:cont,comentario}=parseSheetName(sheetName);allSheets.push({sheetName,contenedor:cont,comentario,items})}
+          }
+        }
+      }
+      if(dPI)setPiNum(dPI);if(dModelo)setModelo(dModelo);if(dProveedor)setProveedor(dProveedor);if(dEta)setEta(dEta);if(dUnidades)setUnidades(dUnidades)
+      if(allSheets[0]?.contenedor)setContenedor(allSheets[0].contenedor)
+      setPreview(allSheets)
+      const totalPartes=allSheets.reduce((a:number,s:any)=>a+s.items.length,0)
+      alert(`✓ ${files.length} archivo(s) · ${allSheets.length} contenedor(es) · ${totalPartes} partes
+PI: ${dPI||'—'} · Modelo: ${dModelo||'—'}`)
+    }catch(err:any){alert('Error al leer: '+err.message)}
+    setLoading(false)
+    if(e.target)e.target.value=''
+  }
+
   const checkPiDuplicado = async (val: string) => {
     if (!val.trim()) { setPiDuplicado(false); setCatMatch(null); return }
     const {data} = await supabase.from('pis').select('id').ilike('pi_number',`${val.trim()}-%`).limit(1)
